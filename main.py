@@ -6,6 +6,10 @@ import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
+# Thêm import cho Flask và threading
+from flask import Flask
+from threading import Thread
+
 # ==== Cấu hình ====
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8137068939:AAG19xO92yXsz_d9vz_m2aJW2Wh8JZnvSPQ") # Đã cập nhật TOKEN
 ADMIN_ID = int(os.getenv("ADMIN_ID", "6915752059")) # Đã cập nhật ADMIN_ID
@@ -112,10 +116,10 @@ def format_sunwin_result(data):
         # Sử dụng mẫu tin nhắn mới được cung cấp
         message = (
             f"🏆 <b>SUNWIN LUXURY VIP</b> 🏆\n"
-            f"🎯 Phiên: <code>{phien_truoc}</code>\n" # 'phien_truoc' sẽ là phiên hiện tại theo mẫu mới
+            f"🎯 Phiên: <code>{phien_truoc}</code>\n" 
             f"🎲 Kết quả: <b>{ket_qua}</b>\n"
             f"🧩 Pattern: <code>{cau}</code>\n"
-            f"🎮 Phiên: <code>{phien_hien_tai}</code> : <b>{du_doan}</b> (MODEL BASIC)\n" # 'phien_hien_tai' sẽ là phiên dự đoán tiếp theo
+            f"🎮 Phiên: <code>{phien_hien_tai}</code> : <b>{du_doan}</b> (MODEL BASIC)\n" 
             f"🌟 Độ tin cậy: <code>🔥 {do_tin_cay} 🔥</code>\n"
             f"⏰ Thời Gian: <code>{ngay.split(' ')[0]}</code>\n" # Lấy chỉ phần thời gian từ trường 'ngay'
             f"🪼 <b>LUXURY VIP BOT PREMIUM</b> 🪼"
@@ -413,7 +417,6 @@ async def contact_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
     
-    # Đã sửa lại URL liên hệ admin
     keyboard = [[InlineKeyboardButton("📞 Liên hệ Admin", url="https://t.me/nhutquangdz")]] 
     await update.message.reply_text(
         "📞 Để liên hệ với admin, vui lòng nhấn nút bên dưới:",
@@ -622,24 +625,22 @@ async def check_bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode="HTML")
 
-def main():
-    """Hàm chính để chạy bot"""
-    # Tạo ứng dụng
-    application = Application.builder().token(TOKEN).build()
-    
-    # Thêm handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("bat", bat_command))
-    application.add_handler(CommandHandler("tat", tat_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Thêm job queue cho auto notification với chu kì 30 giây
-    if application.job_queue:
-        application.job_queue.run_repeating(send_auto_notification, interval=30, first=10)
-    
-    # Chạy bot
-    print("🚀 Bot đang khởi động...")
-    application.run_polling()
+---
 
-if __name__ == "__main__":
-    main()
+### Phần mã Health Check (Flask) mới được thêm
+
+```python
+# Khởi tạo Flask app
+app = Flask(__name__)
+
+# Định nghĩa điểm cuối Health Check
+@app.route('/')
+def health_check():
+    return 'Bot is alive and running!'
+
+# Hàm chạy Flask app trong một luồng riêng
+def run_flask_app():
+    # Lấy cổng từ biến môi trường PORT (đặc biệt hữu ích khi triển khai trên Render)
+    # Nếu không có biến môi trường PORT, mặc định dùng cổng 5000
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
