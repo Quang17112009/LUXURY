@@ -11,7 +11,7 @@ from flask import Flask
 from threading import Thread
 
 # ==== Cấu hình ====
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8137068939:AAG19xO92yXsz_d9vz_m2aJWWh8JZnvSPQ") 
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8137068939:AAG19xO92yXsz_d9vz_m2aJW2Wh8JZnvSPQ") 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "6915752059")) 
 USER_FILE = "users.json"
 STATUS_FILE = "status.json"
