@@ -11,17 +11,21 @@ from flask import Flask
 from threading import Thread
 
 # ==== Cấu hình ====
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8137068939:AAG19xO92yXsz_d9vz_m2aJW2Wh8JZnvSPQ") # Đã cập nhật TOKEN
-ADMIN_ID = int(os.getenv("ADMIN_ID", "6915752059")) # Đã cập nhật ADMIN_ID
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8137068939:AAG19xO92yXsz_d9vz_m2aJWWh8JZnvSPQ") 
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6915752059")) 
 USER_FILE = "users.json"
 STATUS_FILE = "status.json"
 SUNWIN_API_URL = "https://sunwin-taixiu-1.onrender.com/taixiu" 
+
+# Biến toàn cục để lưu trữ phiên cuối cùng đã gửi
+# Đây là cách đơn giản để lưu trạng thái giữa các lần chạy của send_auto_notification
+last_sent_phien_hien_tai = None 
 
 # ==== Keyboard layouts ====
 def get_user_keyboard():
     """Keyboard cho người dùng thường"""
     keyboard = [
-        ["📆 Kiểm tra thời hạn", "🎮 Chọn game"],
+        ["📆 Kiểm tra thời hạn", "🎮 Chọn game"], # Giữ nút chọn game để thông báo
         ["📞 Liên hệ Admin", "ℹ️ Trợ giúp"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
@@ -51,10 +55,16 @@ def save_users(data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 def is_user_active(user_id):
-    """Kiểm tra người dùng có đang hoạt động"""
+    """Kiểm tra người dùng có đang hoạt động (key còn hạn)"""
     users = load_users()
     info = users.get(str(user_id), {})
-    return info.get("active", False)
+    if "expire" in info:
+        try:
+            expire = datetime.datetime.fromisoformat(info["expire"])
+            return datetime.datetime.now() < expire
+        except:
+            return False
+    return False
 
 def is_admin(user_id):
     """Kiểm tra quyền admin"""
@@ -131,32 +141,63 @@ def format_sunwin_result(data):
 
 # ==== Auto Notification Function ====
 async def send_auto_notification(context: ContextTypes.DEFAULT_TYPE):
-    """Gửi thông báo tự động cho tất cả user active"""
+    """Gửi thông báo tự động cho tất cả user có key hợp lệ khi có phiên mới"""
+    global last_sent_phien_hien_tai # Khai báo để có thể sửa đổi biến toàn cục
+
+    print(f"--- send_auto_notification: Bắt đầu chu kỳ lúc {datetime.datetime.now()} ---")
+    
     # Kiểm tra trạng thái bot
-    if get_status() != "on":
+    current_status = get_status()
+    print(f"send_auto_notification: Trạng thái bot hiện tại: {current_status}")
+    if current_status != "on":
+        print("send_auto_notification: Bot không ở trạng thái 'on', bỏ qua chu kỳ này.")
         return
     
     # Lấy dữ liệu từ API
+    print("send_auto_notification: Đang gọi API Sunwin...")
     data = await fetch_sunwin_data()
+    if not data:
+        print("send_auto_notification: API Sunwin không trả về dữ liệu hoặc có lỗi, bỏ qua chu kỳ này.")
+        return # Không gửi nếu dữ liệu API không tốt
+
+    current_phien_hien_tai = data.get('phien_hien_tai')
+    if current_phien_hien_tai is None:
+        print("send_auto_notification: Không tìm thấy 'phien_hien_tai' trong dữ liệu API, bỏ qua.")
+        return
+
+    # Kiểm tra xem có phải phiên mới không
+    if last_sent_phien_hien_tai == current_phien_hien_tai:
+        print(f"send_auto_notification: Phiên {current_phien_hien_tai} đã được gửi, không có phiên mới.")
+        return # Không có phiên mới, không gửi
+
+    print(f"send_auto_notification: Phát hiện phiên mới: {current_phien_hien_tai}. Phiên trước: {last_sent_phien_hien_tai}")
+    last_sent_phien_hien_tai = current_phien_hien_tai # Cập nhật phiên cuối cùng đã gửi
+
     message = format_sunwin_result(data)
+    print(f"send_auto_notification: Tin nhắn đã định dạng: {message[:100]}...") # In 100 ký tự đầu
     
-    # Lấy danh sách user active
+    # Lấy danh sách user có key còn hạn
     users = load_users()
-    active_users = []
+    eligible_users = []
     
+    print(f"send_auto_notification: Tổng số user trong users.json: {len(users)}")
     for user_id, info in users.items():
-        # Kiểm tra user có active và key còn hạn
-        if info.get("active", False):
-            try:
-                expire = datetime.datetime.fromisoformat(info["expire"])
-                if datetime.datetime.now() < expire:
-                    active_users.append(int(user_id))
-            except:
-                continue
+        try:
+            # Kiểm tra user có key còn hạn
+            if is_user_active(user_id): # Sử dụng hàm is_user_active đã cập nhật
+                eligible_users.append(int(user_id))
+                print(f"send_auto_notification: User {user_id} đủ điều kiện nhận thông báo.")
+            else:
+                print(f"send_auto_notification: User {user_id} không đủ điều kiện (key hết hạn).")
+        except Exception as e:
+            print(f"send_auto_notification: Lỗi khi kiểm tra user {user_id}: {str(e)}")
+            continue
     
-    # Gửi tin nhắn cho tất cả user active
+    print(f"send_auto_notification: Số lượng user đủ điều kiện nhận thông báo: {len(eligible_users)}")
+    
+    # Gửi tin nhắn cho tất cả user đủ điều kiện
     sent_count = 0
-    for user_id in active_users:
+    for user_id in eligible_users:
         try:
             await context.bot.send_message(
                 chat_id=user_id,
@@ -164,12 +205,13 @@ async def send_auto_notification(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
             sent_count += 1
+            print(f"send_auto_notification: Đã gửi thành công cho user {user_id}.")
             # Delay nhỏ để tránh spam
             await asyncio.sleep(0.1)
         except Exception as e:
-            print(f"Không thể gửi cho user {user_id}: {str(e)}")
+            print(f"send_auto_notification: KHÔNG THỂ GỬI cho user {user_id}: {str(e)}")
     
-    print(f"Auto notification sent to {sent_count} users")
+    print(f"--- send_auto_notification: Đã gửi thông báo tự động tới {sent_count} user ---")
 
 # ==== Lệnh bắt đầu ====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -220,29 +262,24 @@ async def bat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     set_status("on")
     
-    # Gửi thông báo cho tất cả user active
+    # Gửi thông báo cho tất cả user có key hợp lệ
     users = load_users()
-    active_users = []
+    eligible_users = []
     
     for user_id, info in users.items():
-        if info.get("active", False):
-            try:
-                expire = datetime.datetime.fromisoformat(info["expire"])
-                if datetime.datetime.now() < expire:
-                    active_users.append(int(user_id))
-            except:
-                continue
+        if is_user_active(user_id):
+            eligible_users.append(int(user_id))
     
     notification_message = (
         "🟢 <b>BOT ĐÃ ĐƯỢC BẬT</b>\n\n"
         "🎮 Game: <b>SUNWIN.US</b>\n"
-        "⏰ Chu kì gửi: <b>30 giây</b>\n"
-        "📡 Bạn sẽ nhận được kết quả tự động\n\n"
+        "⏰ Chu kì kiểm tra: <b>30 giây</b>\n"
+        "📡 Bạn sẽ nhận được kết quả tự động khi có phiên mới\n\n"
         "💎 Bot VIP Pro đang hoạt động!"
     )
     
     sent_count = 0
-    for user_id in active_users:
+    for user_id in eligible_users:
         try:
             await context.bot.send_message(
                 chat_id=user_id,
@@ -255,8 +292,8 @@ async def bat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"🟢 <b>BOT ĐÃ ĐƯỢC BẬT</b>\n\n"
-        f"📡 Đã thông báo cho {sent_count} user active\n"
-        f"⏰ Tự động gửi kết quả mỗi 30 giây",
+        f"📡 Đã thông báo cho {sent_count} user đủ điều kiện\n"
+        f"⏰ Tự động kiểm tra và gửi kết quả khi có phiên mới",
         parse_mode="HTML"
     )
 
@@ -271,18 +308,13 @@ async def tat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     set_status("off")
     
-    # Gửi thông báo cho tất cả user active
+    # Gửi thông báo cho tất cả user có key hợp lệ
     users = load_users()
-    active_users = []
+    eligible_users = []
     
     for user_id, info in users.items():
-        if info.get("active", False):
-            try:
-                expire = datetime.datetime.fromisoformat(info["expire"])
-                if datetime.datetime.now() < expire:
-                    active_users.append(int(user_id))
-            except:
-                continue
+        if is_user_active(user_id):
+            eligible_users.append(int(user_id))
     
     notification_message = (
         "🔴 <b>BOT ĐÃ ĐƯỢC TẮT</b>\n\n"
@@ -292,7 +324,7 @@ async def tat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     sent_count = 0
-    for user_id in active_users:
+    for user_id in eligible_users:
         try:
             await context.bot.send_message(
                 chat_id=user_id,
@@ -305,7 +337,7 @@ async def tat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"🔴 <b>BOT ĐÃ ĐƯỢC TẮT</b>\n\n"
-        f"📡 Đã thông báo cho {sent_count} user active\n"
+        f"📡 Đã thông báo cho {sent_count} user đủ điều kiện\n"
         f"⏸️ Dừng gửi kết quả tự động",
         parse_mode="HTML"
     )
@@ -336,7 +368,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📆 Kiểm tra thời hạn":
         await check_expire(update, context)
     elif text == "🎮 Chọn game":
-        await select_game(update, context)
+        await select_game(update, context) # Nút này giờ chỉ để thông báo
     elif text == "📞 Liên hệ Admin":
         await contact_admin(update, context)
     elif text == "ℹ️ Trợ giúp":
@@ -380,35 +412,24 @@ async def check_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Chưa kích hoạt! Liên hệ admin.")
 
 async def select_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Chọn game"""
+    """Thông báo cho người dùng rằng họ sẽ nhận thông báo nếu key hợp lệ"""
     if not update.message or not update.effective_user:
         return
     
     user_id = str(update.effective_user.id)
-    users = load_users()
     
-    if user_id not in users:
-        await update.message.reply_text("❌ Bạn chưa có key. Liên hệ admin để kích hoạt.")
+    if not is_user_active(user_id): # Sử dụng hàm is_user_active đã cập nhật
+        await update.message.reply_text("❌ Bạn chưa có key hợp lệ hoặc key đã hết hạn. Liên hệ admin để kích hoạt/gia hạn.")
         return
-    
-    # Kiểm tra key có còn hạn không
-    expire = datetime.datetime.fromisoformat(users[user_id]["expire"])
-    if datetime.datetime.now() >= expire:
-        await update.message.reply_text("❌ Key đã hết hạn. Liên hệ admin để gia hạn.")
-        return
-    
-    # Kích hoạt user để nhận thông báo tự động
-    users[user_id]["active"] = True
-    save_users(users)
     
     bot_status = get_status()
     status_text = "🟢 Đang hoạt động" if bot_status == "on" else "🔴 Đã tắt"
     
     await update.message.reply_text(
-        f"🎮 <b>Đã chọn game SUNWIN.US</b>\n\n"
+        f"🎮 <b>Bạn đã chọn game SUNWIN.US</b>\n\n"
         f"📊 Trạng thái bot: {status_text}\n"
-        f"🔑 Bạn đã được kích hoạt nhận kết quả tự động\n\n"
-        f"💡 Khi admin bật bot, bạn sẽ nhận kết quả mỗi 30 giây",
+        f"🔑 Bạn sẽ tự động nhận kết quả khi có phiên mới (nếu bot đang bật)\n\n"
+        f"💡 Khi admin bật bot, bạn sẽ nhận kết quả tự động",
         parse_mode="HTML"
     )
 
@@ -431,12 +452,12 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "ℹ️ <b>HƯỚNG DẪN SỬ DỤNG BOT</b>\n\n"
         "🔹 <b>📆 Kiểm tra thời hạn:</b> Xem thời gian còn lại của key\n"
-        "🔹 <b>🎮 Chọn game:</b> Chọn game SUNWIN.US và kích hoạt nhận thông báo\n"
+        "🔹 <b>🎮 Chọn game:</b> Thông báo rằng bạn sẽ nhận thông báo tự động (nếu có key hợp lệ)\n"
         "🔹 <b>📞 Liên hệ Admin:</b> Liên hệ để hỗ trợ\n\n"
         "🎯 <b>Hệ thống tự động:</b>\n"
-        "• Khi admin bật bot, bạn sẽ nhận kết quả mỗi 30 giây\n"
+        "• Khi admin bật bot, bạn sẽ nhận kết quả mỗi khi có phiên mới từ API\n"
         "• Khi admin tắt bot, hệ thống sẽ dừng gửi kết quả\n\n"
-        "💡 <b>Lưu ý:</b> Cần có key hợp lệ và chọn game để nhận thông báo"
+        "💡 <b>Lưu ý:</b> Cần có key hợp lệ để nhận thông báo tự động"
     )
     await update.message.reply_text(help_text, parse_mode="HTML")
 
@@ -517,7 +538,8 @@ async def process_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE, te
         
         users = load_users()
         expire_date = datetime.datetime.now() + datetime.timedelta(days=days)
-        users[user_id] = {"expire": expire_date.isoformat(), "active": True}
+        # Không cần active=True ở đây nữa, vì is_user_active sẽ kiểm tra expire
+        users[user_id] = {"expire": expire_date.isoformat()} 
         save_users(users)
         
         await update.message.reply_text(
@@ -576,7 +598,7 @@ async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if expire > now:
             remain = expire - now
-            status = "✅ Còn hạn" if info.get("active", False) else "⏸️ Tạm dừng"
+            status = "✅ Còn hạn" # Trạng thái active không còn được quản lý bởi người dùng
             message += f"{count}. ID: <code>{user_id}</code>\n"
             message += f"   📅 Còn: {remain.days} ngày\n"
             message += f"   📊 Trạng thái: {status}\n\n"
@@ -609,7 +631,8 @@ async def check_bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = get_status()
     users = load_users()
     total_users = len(users)
-    active_users = sum(1 for info in users.values() if info.get("active", False))
+    # Đếm user đủ điều kiện (key còn hạn)
+    eligible_users_count = sum(1 for user_id in users if is_user_active(user_id)) 
     
     status_text = "🟢 Đang hoạt động" if status == "on" else "🔴 Đã tắt"
     
@@ -617,9 +640,9 @@ async def check_bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 <b>TRẠNG THÁI BOT</b>\n\n"
         f"🤖 Bot: {status_text}\n"
         f"👥 Tổng users: {total_users}\n"
-        f"📡 Users active: {active_users}\n"
+        f"📡 Users đủ điều kiện nhận thông báo: {eligible_users_count}\n"
         f"🎮 Game: SUNWIN.US\n"
-        f"⏰ Chu kì: 30 giây\n\n"
+        f"⏰ Chu kì kiểm tra: 30 giây\n\n"
         f"💎 Bot VIP Pro"
     )
     
