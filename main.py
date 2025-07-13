@@ -625,15 +625,11 @@ async def check_bot_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(message, parse_mode="HTML")
 
----
-
-### Phần mã Health Check (Flask) mới được thêm
-
-```python
-# Khởi tạo Flask app
+# --- Bắt đầu phần Health Check (Flask) ---
+# Khởi tạo Flask app (phải nằm ở global scope)
 app = Flask(__name__)
 
-# Định nghĩa điểm cuối Health Check
+# Định nghĩa điểm cuối Health Check (phải nằm ở global scope)
 @app.route('/')
 def health_check():
     return 'Bot is alive and running!'
@@ -643,4 +639,35 @@ def run_flask_app():
     # Lấy cổng từ biến môi trường PORT (đặc biệt hữu ích khi triển khai trên Render)
     # Nếu không có biến môi trường PORT, mặc định dùng cổng 5000
     port = int(os.getenv("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    print(f"🌍 Flask Health Check server starting on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False) # debug=False cho môi trường production
+# --- Kết thúc phần Health Check (Flask) ---
+
+
+def main():
+    """Hàm chính để chạy bot"""
+    # Tạo ứng dụng Telegram bot
+    application = Application.builder().token(TOKEN).build()
+    
+    # Thêm handlers cho các lệnh và tin nhắn
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("bat", bat_command))
+    application.add_handler(CommandHandler("tat", tat_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Thêm job queue cho auto notification với chu kì 30 giây
+    if application.job_queue:
+        application.job_queue.run_repeating(send_auto_notification, interval=30, first=10)
+    
+    # Khởi động Flask app trong một luồng riêng biệt
+    # Điều này cho phép bot Telegram polling và Flask web server chạy đồng thời
+    flask_thread = Thread(target=run_flask_app)
+    flask_thread.daemon = True # Đặt là daemon thread để nó tự tắt khi chương trình chính kết thúc
+    flask_thread.start()
+    
+    # Chạy bot Telegram ở chế độ polling
+    print("🚀 Bot đang khởi động...")
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
